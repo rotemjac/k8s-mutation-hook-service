@@ -1,0 +1,86 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mutator
+  labels:
+    app: mutator
+spec:
+  publishNotReadyAddresses: true
+  ports:
+    - port: 443
+      targetPort: 8443
+  selector:
+    app: mutator
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mutator
+  labels:
+    app: mutator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mutator
+  template:
+    metadata:
+      name: mutator
+      labels:
+        app: mutator
+    spec:
+      containers:
+        - name: mutator
+          image: alexleonhardt/k8s-mutate-webhook:latest
+          imagePullPolicy: Always
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 250m
+              memory: 64Mi
+
+---
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutator
+  labels:
+    app: mutator
+  annotations:
+    cert-manager.io/inject-ca-from: trino/webhook-certificate
+webhooks:
+  - name: mutator.trino.svc.cluster.local
+    clientConfig:
+      service:
+        name: mutator
+        namespace: default
+        path: "/mutate"
+        port: 443
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    sideEffects: None
+    timeoutSeconds: 5
+    reinvocationPolicy: Never
+    failurePolicy: Ignore
+    namespaceSelector:
+      matchLabels:
+        mutator: enabled
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: webhook-certificate
+  namespace: trino
+spec:
+  secretName: webhook-certificate
+  dnsNames:
+    - webhook.trino
+  issuerRef:
+    name: selfsigned

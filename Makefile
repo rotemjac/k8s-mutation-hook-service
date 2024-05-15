@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' $(dpl))
 build:
 	go mod tidy
 	go mod vendor
-	cd cmd && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ../artifacts/${BINARY_NAME}
+	cd cmd && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../artifacts/${BINARY_NAME}
 
 image: build
 	docker build -f build/Dockerfile -t ${DOCKER_REPO_PATH}/${DOCKER_REPO_NAME}:${DOCKER_TAG} .

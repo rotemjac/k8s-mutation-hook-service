@@ -5,13 +5,21 @@ package mutate
 import (
 	"encoding/json"
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
 	"strings"
+	"time"
 
-	v1beta1 "k8s.io/api/admission/v1beta1"
+	admissionv1 "k8s.io/api/admission/v1"
+	v1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+type PatchOperation struct {
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
+	Value interface{} `json:"value,omitempty"`
+}
 
 // Mutate mutates
 func Mutate(body []byte, verbose bool) ([]byte, error) {
@@ -20,7 +28,7 @@ func Mutate(body []byte, verbose bool) ([]byte, error) {
 	}
 
 	// unmarshal request into AdmissionReview struct
-	admReview := v1beta1.AdmissionReview{}
+	admReview := &admissionv1.AdmissionReview{}
 	if err := json.Unmarshal(body, &admReview); err != nil {
 		return nil, fmt.Errorf("unmarshaling request failed with %s", err)
 	}
@@ -29,72 +37,78 @@ func Mutate(body []byte, verbose bool) ([]byte, error) {
 	var pod *corev1.Pod
 
 	responseBody := []byte{}
-	ar := admReview.Request
-	resp := v1beta1.AdmissionResponse{}
+	admReviewRequest := admReview.Request
+	admResponse := v1.AdmissionResponse{}
 
-	if ar != nil {
-
-		// get the Pod object and unmarshal it into its struct, if we cannot, we might as well stop here
-		if err := json.Unmarshal(ar.Object.Raw, &pod); err != nil {
+	if admReviewRequest != nil {
+		// Get the Pod object and unmarshal it into its struct, if we cannot, we might as well stop here
+		if err := json.Unmarshal(admReviewRequest.Object.Raw, &pod); err != nil {
 			return nil, fmt.Errorf("unable unmarshal pod json object %v", err)
 		}
-		// set response options
-		resp.Allowed = true
-		resp.UID = ar.UID
-		pT := v1beta1.PatchTypeJSONPatch
-		resp.PatchType = &pT // it's annoying that this needs to be a pointer as you cannot give a pointer to a constant?
 
-		// the actual mutation is done by a string in JSONPatch style, i.e. we don't _actually_ modify the object, but
+		// The actual mutation is done by a string in JSONPatch style, i.e. we don't _actually_ modify the object, but
 		// tell K8S how it should modifiy it
-		p := []map[string]string{}
+		//p := []map[string]string{}
 
+		//var patchStr string
+
+		currentTime := time.Now()
+		timestamp := currentTime.Format("2006.01.02 15:04:05")
+		timestamp = strings.Replace(timestamp, ".", "-", -1)
+		timestamp = strings.Replace(timestamp, ":", "-", -1)
+		timestamp = strings.Replace(timestamp, " ", "-", -1)
+
+		//path := "/metadata/annotations"
 		prefix := pod.Annotations["dd.replace/prefix"]
-		postfix := pod.Annotations["dd.replace/postfix"]
-		annotationKey := fmt.Sprintf(prefix+"/"+postfix+"-%s", pod.Name)
+		//postfix := pod.Annotations["dd.replace/postfix"]
+		podName := pod.GetGenerateName() + "-" + timestamp
+		annotationKey := fmt.Sprintf(prefix + "/" + podName)
+		var patch []PatchOperation
 
 		//ad.datadoghq.com/trino-worker-<podName>.check_names
-		checkNamesPath := annotationKey + ".check_names"
-		checkNamesValue := pod.Annotations["dd.replace/check_names"]
-		patch := map[string]string{
-			"op":    "add",
-			"path":  checkNamesPath,
-			"value": checkNamesValue,
-		}
-		p = append(p, patch)
+		key1 := annotationKey + ".check_names"
+		value1 := pod.Annotations["dd.replace/check_names"]
 
 		//ad.datadoghq.com/trino-worker-<podName>.init_configs
-		checkNamesPath = annotationKey + ".init_configs"
-		checkNamesValue = pod.Annotations["dd.replace/init_configs"]
-		patch = map[string]string{
-			"op":    "add",
-			"path":  checkNamesPath,
-			"value": checkNamesValue,
-		}
-		p = append(p, patch)
+		key2 := annotationKey + ".init_configs"
+		value2 := "'[{}]'"
 
 		//ad.datadoghq.com/trino-worker-<podName>.instances
-		checkNamesPath = annotationKey + ".instances"
-		checkNamesValue = pod.Annotations["dd.replace/instances"]
-		checkNamesValue = strings.Replace(checkNamesValue, "trino-worker-", "trino-worker-"+pod.Name, -1)
-		patch = map[string]string{
-			"op":    "add",
-			"path":  checkNamesPath,
-			"value": checkNamesValue,
-		}
-		p = append(p, patch)
+		key3 := annotationKey + ".instances"
+		value3 := pod.Annotations["dd.replace/instances"]
+		value3 = strings.Replace(value3, "trino-worker-", podName, -1)
 
-		// parse the []map into JSON
-		resp.Patch, err = json.Marshal(p)
+		patch = append(patch, PatchOperation{
+			Op:   "add",
+			Path: "/metadata/annotations",
+			Value: map[string]string{
+				key1: value1,
+				key2: value2,
+				key3: value3,
+			},
+		})
 
-		// Success, of course ;)
-		resp.Result = &metav1.Status{
-			Status: "Success",
-		}
+		// #######################################
+		pT := v1.PatchTypeJSONPatch
+		admResponse.PatchType = &pT // it's annoying that this needs to be a pointer as you cannot give a pointer to a constant?
 
-		admReview.Response = &resp
+		// Parse the []map into JSON
+		admResponse.Patch, err = json.Marshal(patch)
+
+		// Set response options
+		admReview.Response = &admResponse
+		admResponse.Allowed = true
+
+		// Construct the response, which is just another AdmissionReview.
+		var admissionReviewResponse v1.AdmissionReview
+		admissionReviewResponse.TypeMeta = metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"}
+		admissionReviewResponse.Response = &admResponse
+		//admissionReviewResponse.SetGroupVersionKind(admReviewRequest.GroupVersionKind())
+		admissionReviewResponse.Response.UID = admReviewRequest.UID
+
 		// back into JSON so we can return the finished AdmissionReview w/ Response directly
 		// w/o needing to convert things in the http handler
-		responseBody, err = json.Marshal(admReview)
+		responseBody, err = json.Marshal(admissionReviewResponse)
 		if err != nil {
 			return nil, err // untested section
 		}

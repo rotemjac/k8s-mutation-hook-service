@@ -16,6 +16,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleMutate(w http.ResponseWriter, r *http.Request) {
+	log.Println("Received")
 	// read the body / request
 	body, err := ioutil.ReadAll(r.Body)
 	defer r.Body.Close()
@@ -33,7 +34,9 @@ func handleMutate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// and write it back
+	log.Println("Returned")
 	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
 	w.Write(mutated)
 }
 
@@ -59,5 +62,5 @@ func main() {
 		MaxHeaderBytes: 1 << 20, // 1048576
 	}
 
-	log.Fatal(s.ListenAndServeTLS("./ssl/mutateme.pem", "./ssl/mutateme.key"))
+	log.Fatal(s.ListenAndServeTLS("/etc/webhook-secret/tls.crt", "/etc/webhook-secret/tls.key"))
 }
